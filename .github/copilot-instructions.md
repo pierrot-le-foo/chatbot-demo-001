@@ -2,50 +2,92 @@
 
 ## Project Architecture
 
-This is a Next.js 15 AI chatbot application built with Vercel AI SDK and AI Elements. Uses shadcn/ui components, next-themes for dark mode, and Tailwind CSS v4. The project demonstrates modern AI chat patterns with streaming responses.
+This is a **Next.js 15 AI chatbot demo** with **demo protection features** built using Vercel AI SDK and AI Elements. Uses shadcn/ui components, next-themes for dark mode, and Tailwind CSS v4. The project demonstrates modern AI chat patterns with streaming responses and comprehensive usage restrictions.
+
+## Key Architecture: Demo Protection System
+
+### Rate Limiting & Usage Controls (`lib/rate-limiter.ts`)
+```typescript
+// IP-based rate limiting with configurable windows
+export function checkRateLimit(identifier: string, config: RateLimitConfig)
+
+// Extract client IP from headers for identification
+export function getClientIdentifier(request: Request): string
+```
+
+### Demo Limits Implementation (`app/api/chat/route.ts`)
+```typescript
+// Demo protection constants (update these to adjust limits)
+const MAX_MESSAGES_PER_SESSION = 10;     // Per-session message limit
+const MAX_MESSAGE_LENGTH = 500;          // Character limit per message
+const RATE_LIMIT_CONFIG = {
+  maxRequests: 20,                        // Requests per hour per IP
+  windowMs: 60 * 60 * 1000,              // 1 hour window
+};
+
+// Force cheaper model regardless of selection
+const demoModel = model === 'gpt-4o' ? 'gpt-4o-mini' : (model || 'gpt-4o-mini');
+```
+
+### Frontend Demo UX (`app/page.tsx`)
+```typescript
+// Session tracking and UI feedback
+const userMessageCount = messages.filter(m => m.role === 'user').length;
+const maxMessages = 10; // Must match API constant
+const remainingMessages = Math.max(0, maxMessages - userMessageCount);
+
+// Reset session functionality
+const handleNewSession = () => {
+  setMessages([]);        // Clear chat history
+  setInput('');          // Clear input
+  setLastUserMessage(''); // Clear retry state
+  clearError();          // Clear errors
+};
+```
 
 ## AI SDK Integration Patterns
 
-### useChat Hook Usage
+### useChat Hook with Demo Features
 ```tsx
-// Basic pattern from app/page.tsx
-const { messages, sendMessage } = useChat();
+const { messages, sendMessage, error, clearError, setMessages } = useChat({
+  onError: (error) => console.error('Chat error:', error),
+});
 
-// Key properties available:
-// - messages: UIMessage[] - Chat message history
-// - sendMessage: ({ text: string }) => void - Send user message
-// - status: 'ready' | 'submitted' | 'streaming' | 'error' - Current state
-// - error: Error | undefined - Error state
-// - stop: () => void - Stop streaming
-// - regenerate: () => void - Regenerate last response
+// Manual loading state (useChat status can be unreliable)
+const [isLoading, setIsLoading] = useState(false);
 ```
 
-### API Route Structure (`app/api/chat/route.ts`)
+### API Route Structure with Protection
 ```typescript
-import { openai } from '@ai-sdk/openai';
-import { streamText, convertToModelMessages } from 'ai';
-
-export const maxDuration = 30; // Required for Vercel deployment
+export const maxDuration = 30; // Required for Vercel streaming
 
 export async function POST(req: Request) {
-  const { messages, model } = await req.json();
+  // 1. Rate limiting check first
+  const rateLimitResult = checkRateLimit(getClientIdentifier(req), RATE_LIMIT_CONFIG);
   
+  // 2. Session message count validation
+  const userMessages = messages.filter(m => m.role === 'user');
+  if (userMessages.length > MAX_MESSAGES_PER_SESSION) { /* limit exceeded */ }
+  
+  // 3. Message length validation
+  if (lastUserMessage?.parts?.some(part => part.text?.length > MAX_MESSAGE_LENGTH)) { /* too long */ }
+  
+  // 4. Force demo model and stream
   const result = streamText({
-    model: openai(model || 'gpt-4o-mini'),
-    messages: convertToModelMessages(messages), // Convert UIMessage[] to ModelMessage[]
-    system: 'Your system prompt here',
+    model: openai(demoModel), // Always use cheaper model
+    messages: convertToModelMessages(messages),
+    system: 'You are a helpful AI assistant. Be concise and helpful in your responses.',
   });
   
   return result.toUIMessageStreamResponse({
-    sendSources: true,    // Enable source citations
-    sendReasoning: true,  // Enable reasoning tokens
+    sendSources: true,
+    sendReasoning: true,
   });
 }
 ```
 
-### Message Handling Patterns
+### Message Rendering with Parts
 ```tsx
-// Render messages with parts (text, reasoning, sources)
 {messages.map((message) => (
   <Message key={message.id} from={message.role}>
     <MessageContent>
@@ -59,6 +101,94 @@ export async function POST(req: Request) {
   </Message>
 ))}
 ```
+
+## Critical UI Patterns
+
+### Demo Limits Display
+```tsx
+// Header with usage counter
+<div className="mt-1 text-sm text-muted-foreground">
+  Demo Mode: {remainingMessages} messages remaining ({userMessageCount}/{maxMessages} used)
+</div>
+
+// Form with character and message limits
+<Textarea maxLength={500} /* ... */ />
+<div className="flex justify-between text-xs text-muted-foreground">
+  <span>{input.length}/500 characters</span>
+  <span>{remainingMessages} messages left</span>
+</div>
+
+// Disabled state when limits reached
+<Button disabled={isLoading || !input.trim() || remainingMessages <= 0}>
+```
+
+### Progressive Warning System
+```tsx
+{remainingMessages <= 2 && remainingMessages > 0 && (
+  <div className="text-xs text-orange-600 dark:text-orange-400">
+    ⚠️ {remainingMessages} messages left
+  </div>
+)}
+
+{remainingMessages === 0 && (
+  <div className="text-xs text-red-600 dark:text-red-400">
+    🚫 Demo limit reached - Start new session
+  </div>
+)}
+```
+
+## Development Workflow
+
+### Environment Setup
+```bash
+# Required environment variable
+OPENAI_API_KEY=your_openai_api_key_here
+
+# Development with Turbopack
+pnpm dev
+
+# Production build with Turbopack
+pnpm build --turbopack
+```
+
+### AI Elements Components (`components/ai-elements/`)
+- **Pre-built components** - Import from `@/components/ai-elements/`
+- **Message system** - `Message` with `from="user|assistant"`, `MessageContent` wrapper
+- **Styled consistently** - Follow existing patterns in `message.tsx`, `response.tsx`
+
+### Styling System (Tailwind CSS v4)
+```css
+/* Global: app/globals.css */
+@import "tailwindcss";
+@import "tw-animate-css";
+
+@custom-variant dark (&:is(.dark *));
+
+/* CSS variables with @theme inline configuration */
+@theme inline {
+  --color-background: var(--background);
+  /* ... extensive color system ... */
+}
+```
+
+## When Making Changes
+
+1. **Demo limits**: Update constants in `app/api/chat/route.ts` AND matching values in `app/page.tsx`
+2. **Rate limiting**: Adjust `RATE_LIMIT_CONFIG` for different IP-based restrictions
+3. **New models**: Add to `models` array but remember `demoModel` logic forces cheaper options
+4. **Error handling**: Use both `error` state and manual `isLoading` for reliable UX
+5. **Client components**: Always use `"use client"` directive when using `useChat` hook
+6. **Message parts**: Handle `text`, `reasoning`, and `source-url` part types in rendering
+7. **Session reset**: Use `setMessages([])` to clear chat history, not just hiding UI
+
+## Demo Protection Philosophy
+
+This codebase prioritizes **user experience while protecting API costs**:
+- **Transparent limits** - Users always know their remaining usage
+- **Graceful degradation** - Warnings before hard stops
+- **Easy recovery** - One-click session reset
+- **Cost control** - Multiple overlapping protection layers
+- **Production-ready** - Proper error handling and TypeScript types
 
 ## AI Elements Components
 

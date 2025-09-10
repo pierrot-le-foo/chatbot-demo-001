@@ -86,7 +86,7 @@ export default function Home() {
           {messages.map((message) => (
             <Message key={message.id} from={message.role}>
               <MessageContent>
-                {message.parts.map((part, index) => {
+                {message.parts.map((part) => {
                   if (part.type === 'text') {
                     return part.text;
                   }
